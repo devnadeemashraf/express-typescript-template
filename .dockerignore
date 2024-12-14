@@ -1,0 +1,21 @@
+# Node modules
+node_modules
+# TypeScript build output
+dist
+# Logs
+*.log
+# Dependency directories
+coverage
+# Configuration files
+.env
+# System files
+.DS_Store
+# IDE and editor files
+.vscode
+.idea
+# Yarn and npm lock files (if you use one but not the other)
+yarn.lock
+package-lock.json
+# Docker build files
+Dockerfile
+docker-compose.yml

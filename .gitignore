@@ -1,0 +1,28 @@
+# Node modules
+node_modules/
+
+# TypeScript output
+dist/
+
+# Yarn and npm lock files (if you use one but not the other)
+yarn.lock
+package-lock.json
+
+# Logs
+*.log
+
+# Coverage folder for Jest (if you use Jest)
+coverage/
+
+# .env files
+.env
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+
+# Mac system files
+*.swp
