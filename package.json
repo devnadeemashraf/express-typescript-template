@@ -1,0 +1,28 @@
+{
+  "name": "express-typescript-template",
+  "version": "0.1.0",
+  "description": "A Production Ready Express TypeScript Template to start building your next big project in no time. ",
+  "main": "dist/index.js",
+  "repository": "https://github.com/devnadeemashraf/express-typescript-template.git",
+  "author": "Nadeem Ashraf dev.nadeemashraf06@gmail.com",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "pretty:write": "prettier . --write",
+    "pretty:check": "prettier . --check"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "typescript": "^5.8.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.11",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.0",
+    "prettier": "3.5.3"
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
+  }
+}
