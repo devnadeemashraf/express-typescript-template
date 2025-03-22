@@ -4,12 +4,35 @@
   "description": "A Production Ready Express TypeScript Template to start building your next big project in no time. ",
   "main": "dist/index.js",
   "repository": "https://github.com/devnadeemashraf/express-typescript-template.git",
-  "author": "Nadeem Ashraf dev.nadeemashraf06@gmail.com",
+  "author": {
+    "name": "Nadeem Ashraf",
+    "email": "dev.nadeemashraf06@gmail.com"
+  },
   "license": "MIT",
   "private": true,
+  "engines": {
+    "node": ">=22.14.0",
+    "yarn": ">=1.22.22"
+  },
   "scripts": {
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev:setup": "node scripts/setup.js",
+    "build": "tsc",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "pretty:write": "prettier . --write",
-    "pretty:check": "prettier . --check"
+    "pretty:check": "prettier . --check",
+    "clean": "rimraf dist",
+    "prepare": "husky",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -20,7 +43,9 @@
     "@types/node": "^22.13.11",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.0",
-    "prettier": "3.5.3"
+    "nodemon": "^3.1.9",
+    "prettier": "3.5.3",
+    "prisma": "^6.5.0"
   },
   "lint-staged": {
     "**/*": "prettier . --write --ignore-unknown"

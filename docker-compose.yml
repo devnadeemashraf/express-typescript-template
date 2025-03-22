@@ -1,0 +1,72 @@
+name: "express-typescript-template"
+
+services:
+  # PostgreSQL - Main application database
+  app_db:
+    container_name: ett-app-db
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DB_V1}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DB_V1}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL - Logging database
+  logs_db:
+    container_name: ett-logs-db
+    image: mysql:8
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_LOG_DB_V1}
+      MYSQL_USER: ${MYSQL_LOG_USER}
+      MYSQL_PASSWORD: ${MYSQL_LOG_PASSWORD}
+    ports:
+      - "${MYSQL_LOG_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "${MYSQL_LOG_USER}",
+          "-p${MYSQL_LOG_PASSWORD}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Cache database
+  cache_db:
+    container_name: ett-cache-db
+    image: redis:7
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  mysql_data:
+  redis_data:
