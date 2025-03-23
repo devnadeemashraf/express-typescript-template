@@ -1,0 +1,67 @@
+generator client {
+    provider = "prisma-client-js"
+    output   = "./generated/app-client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("PG_APP_URL")
+}
+
+enum UserRole {
+    ADMIN
+    MODERATOR
+    APPRENTICE
+    USER
+    GUEST
+}
+
+enum UserAccountStatus {
+    ACTIVE
+    INACTIVE
+    SUSPENDED
+    DELETED
+}
+
+model User {
+    // Core fields
+    id     String            @id @unique @default(uuid())
+    role   UserRole          @default(GUEST)
+    status UserAccountStatus @default(ACTIVE)
+
+    // User Profile Relationship 
+    is_profile_complete Boolean      @default(false)
+    user_profile        UserProfile?
+
+    // Timestamps fields
+    created_at DateTime @default(now())
+    updated_at DateTime @updatedAt
+
+    @@index([role])
+    @@index([status])
+    @@map("users")
+}
+
+model UserProfile {
+    id String @id @unique @default(uuid())
+
+    // User Relationship
+    user_id String @unique
+    user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+    // User Account fields
+    username        String  @unique
+    email           String  @unique
+    password_hashed String
+    first_name      String?
+    last_name       String?
+
+    // Timestamps fields
+    created_at DateTime @default(now())
+    updated_at DateTime @updatedAt
+
+    @@index([user_id])
+    @@index([username, email])
+    @@index([first_name, last_name])
+    @@map("user_profiles")
+}

@@ -137,3 +137,9 @@ dist
 
 # Local Files
 TASKS.md
+
+# Prisma Generated Files
+prisma/.env
+prisma/.schema
+prisma/.client
+prisma/generated

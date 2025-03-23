@@ -30,11 +30,16 @@
     "prepare": "husky",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:generate": "yarn prisma:generate:app && yarn prisma:generate:logs",
+    "prisma:generate:app": "prisma generate --schema=./prisma/schema.app.prisma",
+    "prisma:generate:logs": "prisma generate --schema=./prisma/schema.logs.prisma",
+    "prisma:migrate:app": "prisma migrate dev --schema=./prisma/schema.app.prisma",
+    "prisma:migrate:logs": "prisma migrate dev --schema=./prisma/schema.logs.prisma",
+    "prisma:studio:app": "prisma studio --schema=./prisma/schema.app.prisma",
+    "prisma:studio:logs": "prisma studio --schema=./prisma/schema.logs.prisma"
   },
   "dependencies": {
+    "@prisma/client": "^6.5.0",
     "express": "^4.21.2",
     "typescript": "^5.8.2"
   },
