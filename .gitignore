@@ -137,6 +137,7 @@ dist
 
 # Local Files
 TASKS.md
+RESOURCES.md
 
 # Prisma Generated Files
 prisma/.env
