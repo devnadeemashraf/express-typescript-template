@@ -1,21 +1,27 @@
-// Implements Graceful Shutdown
-import "@/utils/shutdown";
-
 // Express App
-import app, { Server } from "@/app";
+import { createApp, startServer } from "@/app";
 
-// Configs
-import { env } from "@/configs";
+// Logger
+import logger from "@/utils/logger";
 
 // HTTP Serve Function
-async function serve() {
-  const server: Server = app.listen(env.port, () => {
-    console.log(`Listening on PORT: ${env.port}`);
-  });
+async function main() {
+  try {
+    // Initialize App
+    const app = await createApp();
 
-  // HTTP Server
-  console.log(server);
+    // Start Server
+    await startServer(app);
+  } catch (error) {
+    logger.error("Failed to start application", {
+      error: {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+      },
+    });
+    process.exit(1);
+  }
 }
 
 // Run Server
-serve();
+main();
