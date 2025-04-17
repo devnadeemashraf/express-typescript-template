@@ -56,6 +56,21 @@ export class RedisLogStorage {
     }
   }
 
+  /**
+   * Check if Redis is reachable
+   * @returns Promise that resolves to true if Redis is reachable
+   */
+  async ping(): Promise<boolean> {
+    try {
+      await this.connect();
+      await this.client.ping();
+      return true;
+    } catch (error) {
+      console.error("Redis ping failed:", error);
+      return false;
+    }
+  }
+
   // TODO [devnadeemashraf]: Replace with Logger instead of console.error
   /**
    * Push multiple logs to Redis

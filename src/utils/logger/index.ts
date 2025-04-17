@@ -5,24 +5,25 @@ import { redisLogStorage } from "./redis.storage";
 import { prismaLogStorage } from "./prisma.storage";
 
 import Queue from "@/structs/queue";
-import { ELogLevel, ILogEntry } from "@/interfaces/logs";
+import { ELogLevel, ELogType, ILogEntry } from "@/interfaces/logs";
 import { env } from "@/configs";
 
 /**
- * Extended log entry with additional system information
+ * Extended log entry with additional system information and log type
  */
 interface IExtendedLogEntry extends ILogEntry {
   hostname: string;
   pid: number;
   appName: string;
+  logType: ELogType;
 }
 
 /**
- * Advanced logger with memory queue, Redis persistence, and database storage
+ * Logger with memory queue, Redis persistence, and selective database storage
  */
 export class Logger {
   private winstonLogger;
-  private memoryQueue: Queue<ILogEntry>;
+  public memoryQueue: Queue<IExtendedLogEntry>;
   private flushInterval: NodeJS.Timeout | null = null;
   private isFlushing: boolean = false;
   private readonly hostname: string;
@@ -30,31 +31,77 @@ export class Logger {
   private readonly flushIntervalMs: number;
   private readonly isProduction: boolean;
 
+  // Health status tracking
+  private redisStatus: boolean = false;
+  private prismaStatus: boolean = false;
+
   /**
    * Create a new logger instance
-   * @param options Logger configuration options
    */
   constructor({ maxMemoryQueueSize = 1000, flushIntervalMs = 5000 } = {}) {
     // Initialize components
     this.winstonLogger = createWinstonLogger();
-    this.memoryQueue = new Queue<ILogEntry>();
+    this.memoryQueue = new Queue<IExtendedLogEntry>();
 
     this.hostname = os.hostname();
-
     this.maxMemoryQueueSize = maxMemoryQueueSize;
     this.flushIntervalMs = flushIntervalMs;
-
     this.isProduction = env.nodeEnv === "production";
 
     // Start background processing
     this.startBackgroundProcessing();
-
-    // Handle graceful shutdown
-    this.setupGracefulShutdown();
   }
 
   /**
-   * Set up periodic flush and shutdown handlers
+   * Initialize the logger and dependencies
+   */
+  async initialize(): Promise<boolean> {
+    try {
+      // Test Redis and Prisma connections
+      this.redisStatus = await redisLogStorage
+        .connect()
+        .then(() => true)
+        .catch(() => false);
+      this.prismaStatus = await prismaLogStorage.testConnection();
+
+      // Setup graceful shutdown after connections are established
+      this.setupGracefulShutdown();
+
+      return this.redisStatus && this.prismaStatus;
+    } catch (error) {
+      this.winstonLogger.error("Failed to initialize logger", { error });
+      return false;
+    }
+  }
+
+  /**
+   * Check if the logger system is healthy
+   */
+  async healthCheck(): Promise<Record<string, boolean>> {
+    try {
+      // Update status values
+      this.redisStatus = await redisLogStorage.ping();
+      this.prismaStatus = await prismaLogStorage.testConnection();
+
+      return {
+        winston: true, // Winston is always available
+        redis: this.redisStatus,
+        prisma: this.prismaStatus,
+        memoryQueue: true,
+      };
+    } catch (error) {
+      this.winstonLogger.error("Health check failed", { error });
+      return {
+        winston: true,
+        redis: false,
+        prisma: false,
+        memoryQueue: true,
+      };
+    }
+  }
+
+  /**
+   * Set up periodic flush
    */
   private startBackgroundProcessing(): void {
     // Set up interval to flush logs periodically
@@ -68,7 +115,6 @@ export class Logger {
     }
   }
 
-  // TODO [devnadeemashraf]: Figure out how will this graceful shutdown work with the server-level shutdown logic
   /**
    * Handle graceful shutdown of logger
    */
@@ -96,25 +142,26 @@ export class Logger {
 
   /**
    * Add common fields to log entry
-   * @param entry Basic log entry
-   * @returns Extended log entry with system information
    */
-  private enhanceLogEntry(entry: ILogEntry): IExtendedLogEntry {
+  private enhanceLogEntry(entry: ILogEntry, logType: ELogType): IExtendedLogEntry {
     return {
       ...entry,
       hostname: this.hostname,
       pid: process.pid,
       appName: env.appName || "express-typescript-api",
+      logType,
     };
   }
 
   /**
-   * Add a log entry to memory queue
-   * @param level Log level
-   * @param message Log message
-   * @param metadata Additional metadata
+   * Add a log entry to memory queue with specified type
    */
-  log(level: ELogLevel, message: string, metadata?: Record<string, any>): void {
+  private logWithType(
+    level: ELogLevel,
+    message: string,
+    metadata?: Record<string, any>,
+    logType: ELogType = ELogType.CONSOLE
+  ): void {
     // Create log entry
     const entry: ILogEntry = {
       level,
@@ -123,24 +170,28 @@ export class Logger {
       metadata,
     };
 
-    // Add to memory queue
-    this.memoryQueue.enqueue(entry);
+    // Enhance with system information and log type
+    const enhancedEntry = this.enhanceLogEntry(entry, logType);
+
+    // Add to memory queue only if the log should be persisted
+    if (logType !== ELogType.CONSOLE || level === ELogLevel.Error || level === ELogLevel.Warn) {
+      this.memoryQueue.enqueue(enhancedEntry);
+
+      // Flush if memory queue is getting full
+      if (this.memoryQueue.size >= this.maxMemoryQueueSize) {
+        this.flushToRedis();
+      }
+
+      // For errors and warnings, flush immediately to ensure they're persisted
+      if (level === ELogLevel.Error || level === ELogLevel.Warn) {
+        this.flushToRedis();
+      }
+    }
 
     // Log to Winston immediately for console output
     this.winstonLogger.log(level, message, metadata);
-
-    // Flush if memory queue is getting full
-    if (this.memoryQueue.size >= this.maxMemoryQueueSize) {
-      this.flushToRedis();
-    }
-
-    // For critical errors, flush immediately to ensure they're persisted
-    if (level === ELogLevel.Error) {
-      this.flushToRedis();
-    }
   }
 
-  // TODO [devnadeemashraf]: Replace with Logger instead of console.error
   /**
    * Flush memory queue to Redis
    */
@@ -158,19 +209,19 @@ export class Logger {
       // Clear memory queue
       this.memoryQueue.clear();
 
-      // Enhance logs with system information
-      const enhancedLogs = logs.map(log => this.enhanceLogEntry(log));
-
       // Push to Redis
-      await redisLogStorage.pushLogs(enhancedLogs);
+      await redisLogStorage.pushLogs(logs);
 
-      // If we're in production, trigger immediate storage to PostgreSQL
-      // In development, this happens on a schedule to reduce database writes
-      if (this.isProduction && enhancedLogs.some(log => log.level === ELogLevel.Error)) {
+      // If we're in production or have errors, flush to database immediately
+      const hasErrorsOrWarnings = logs.some(
+        log => log.level === ELogLevel.Error || log.level === ELogLevel.Warn
+      );
+
+      if (this.isProduction || hasErrorsOrWarnings) {
         await this.flushRedisToDatabase(50);
       }
     } catch (error) {
-      console.error("Error flushing logs to Redis:", error);
+      this.winstonLogger.error("Error flushing logs to Redis:", { error });
 
       // If Redis flush fails, put logs back in memory queue
       // but avoid infinite growth
@@ -183,10 +234,8 @@ export class Logger {
     }
   }
 
-  // TODO [devnadeemashraf]: Replace with Logger instead of console.error
   /**
    * Flush logs from Redis to PostgreSQL database
-   * @param batchSize Number of logs to process in one batch
    */
   private async flushRedisToDatabase(batchSize: number = 100): Promise<void> {
     try {
@@ -197,10 +246,25 @@ export class Logger {
         return;
       }
 
-      // Store logs in PostgreSQL
-      await prismaLogStorage.storeLogs(logs);
+      // Separate logs by type
+      const requestLogs = logs.filter(log => log.logType === ELogType.REQUEST);
+      const errorLogs = logs.filter(
+        log =>
+          log.logType === ELogType.ERROR ||
+          log.level === ELogLevel.Error ||
+          log.level === ELogLevel.Warn
+      );
+
+      // Store logs in appropriate PostgreSQL tables
+      if (requestLogs.length > 0) {
+        await prismaLogStorage.storeRequestLogs(requestLogs);
+      }
+
+      if (errorLogs.length > 0) {
+        await prismaLogStorage.storeErrorLogs(errorLogs);
+      }
     } catch (error) {
-      console.error("Error flushing logs from Redis to PostgreSQL:", error);
+      this.winstonLogger.error("Error flushing logs from Redis to PostgreSQL:", { error });
     }
   }
 
@@ -208,59 +272,77 @@ export class Logger {
    * Flush all logs from memory and Redis to PostgreSQL
    */
   async flushAll(): Promise<void> {
-    // First flush memory queue to Redis
-    await this.flushToRedis();
+    try {
+      // First flush memory queue to Redis
+      await this.flushToRedis();
 
-    // Then flush Redis to PostgreSQL
-    const count = await redisLogStorage.getLogCount();
-    const batchSize = 100;
+      // Then flush Redis to PostgreSQL
+      const count = await redisLogStorage.getLogCount();
+      const batchSize = 100;
 
-    // Process in batches to avoid memory issues
-    for (let i = 0; i < count; i += batchSize) {
-      await this.flushRedisToDatabase(batchSize);
+      // Process in batches to avoid memory issues
+      for (let i = 0; i < count; i += batchSize) {
+        await this.flushRedisToDatabase(batchSize);
+      }
+    } catch (error) {
+      this.winstonLogger.error("Error in flushAll operation:", { error });
     }
   }
 
   /**
-   * Debug level log
-   * @param message Message to log
-   * @param metadata Additional metadata
+   * Log standard application logs (not stored in DB)
+   */
+  log(level: ELogLevel, message: string, metadata?: Record<string, any>): void {
+    this.logWithType(level, message, metadata, ELogType.CONSOLE);
+  }
+
+  /**
+   * Log an HTTP request (stored in DB)
+   */
+  logRequest(level: ELogLevel, message: string, metadata?: Record<string, any>): void {
+    this.logWithType(level, message, metadata, ELogType.REQUEST);
+  }
+
+  /**
+   * Log an application error (stored in DB)
+   */
+  logError(level: ELogLevel, message: string, metadata?: Record<string, any>): void {
+    this.logWithType(level, message, metadata, ELogType.ERROR);
+  }
+
+  // Standard logging methods (console only, not stored in DB)
+
+  /**
+   * Debug level log (console only)
    */
   debug(message: string, metadata?: Record<string, any>): void {
     this.log(ELogLevel.Debug, message, metadata);
   }
 
   /**
-   * Info level log
-   * @param message Message to log
-   * @param metadata Additional metadata
+   * Info level log (console only)
    */
   info(message: string, metadata?: Record<string, any>): void {
     this.log(ELogLevel.Info, message, metadata);
   }
 
   /**
-   * Warning level log
-   * @param message Message to log
-   * @param metadata Additional metadata
+   * Warning level log (console only, but errors are stored in DB)
    */
   warn(message: string, metadata?: Record<string, any>): void {
-    this.log(ELogLevel.Warn, message, metadata);
+    // Warnings are stored in error log table
+    this.logError(ELogLevel.Warn, message, metadata);
   }
 
   /**
-   * Error level log
-   * @param message Message to log
-   * @param metadata Additional metadata
+   * Error level log (console and DB)
    */
   error(message: string, metadata?: Record<string, any>): void {
-    this.log(ELogLevel.Error, message, metadata);
+    this.logError(ELogLevel.Error, message, metadata);
   }
 
   /**
    * Create a child logger with predefined metadata
-   * @param defaultMetadata Default metadata to include with all logs
-   * @returns Child logger instance
    */
   child(defaultMetadata: Record<string, any> = {}): Logger {
     const childLogger = new Logger({
@@ -268,180 +350,33 @@ export class Logger {
       flushIntervalMs: this.flushIntervalMs,
     });
 
-    // Override log method to include default metadata
-    const originalLog = childLogger.log.bind(childLogger);
-    childLogger.log = (level, message, metadata = {}) => {
-      originalLog(level, message, { ...defaultMetadata, ...metadata });
-    };
+    // Override log methods to include default metadata
+    const methods = ["log", "logRequest", "logError", "debug", "info", "warn", "error"];
+    methods.forEach(method => {
+      const originalMethod = (childLogger as any)[method].bind(childLogger);
+      (childLogger as any)[method] = (level: any, message: any, metadata: any = {}) => {
+        if (method === "log" || method === "logRequest" || method === "logError") {
+          originalMethod(level, message, { ...defaultMetadata, ...metadata });
+        } else {
+          originalMethod(message, { ...defaultMetadata, ...metadata });
+        }
+      };
+    });
 
     return childLogger;
   }
 
   /**
-   * Create a request-scoped logger
-   * @param req Express request object
-   * @returns Request-scoped logger
+   * Get current status of the logger system
    */
-  requestLogger(req: any): Logger {
-    return this.child({
-      requestId: req.id,
-      request: {
-        method: req.method,
-        path: req.path,
-        ip: req.ip,
-        userAgent: req.get("user-agent"),
-      },
-      user: req.user
-        ? {
-            id: req.user.id,
-            email: req.user.email,
-            role: req.user.role,
-          }
-        : undefined,
-    });
-  }
-
-  /**
-   * Create an API request logger middleware
-   * @returns Express middleware function
-   */
-  requestLoggerMiddleware() {
-    return (req: any, res: any, next: any) => {
-      // Create start time for request duration calculation
-      const startTime = Date.now();
-
-      // Create request-scoped logger
-      const requestLogger = this.requestLogger(req);
-
-      // Log request
-      requestLogger.info(`${req.method} ${req.path}`, {
-        query: req.query,
-        params: req.params,
-        // Don't log body for GET/HEAD requests or files uploads
-        body:
-          req.method === "GET" ||
-          req.method === "HEAD" ||
-          (req.headers["content-type"] || "").includes("multipart/form-data")
-            ? undefined
-            : this.sanitizeBody(req.body),
-      });
-
-      // Capture response data
-      const oldSend = res.send;
-      res.send = function (data: any) {
-        res.responseData = data;
-        return oldSend.apply(res, arguments as any);
-      };
-
-      // Log on completion
-      res.on("finish", () => {
-        const duration = Date.now() - startTime;
-        const level =
-          res.statusCode >= 500
-            ? ELogLevel.Error
-            : res.statusCode >= 400
-              ? ELogLevel.Warn
-              : ELogLevel.Info;
-
-        requestLogger.log(level, `${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`, {
-          response: {
-            statusCode: res.statusCode,
-            duration,
-            size: res.get("content-length"),
-            // Only log response body for errors in development
-            body:
-              level !== ELogLevel.Info && !this.isProduction
-                ? this.truncateResponseBody(res.responseData)
-                : undefined,
-          },
-        });
-      });
-
-      // Attach logger to request for use in route handlers
-      req.logger = requestLogger;
-
-      next();
+  getStatus(): Record<string, any> {
+    return {
+      memoryQueueSize: this.memoryQueue.size,
+      memoryQueueMaxSize: this.maxMemoryQueueSize,
+      redisConnected: this.redisStatus,
+      prismaConnected: this.prismaStatus,
+      environment: this.isProduction ? "production" : "development",
     };
-  }
-
-  // TODO [devnadeemashraf]: Figure out better way of handling sensitive fields
-  /**
-   * Sanitize request body to remove sensitive information
-   * @param body Request body
-   * @returns Sanitized body
-   */
-  private sanitizeBody(body: any): any {
-    if (!body) return undefined;
-
-    const sensitiveFields = [
-      "password",
-      "secret",
-      "token",
-      "apiKey",
-      "api_key",
-      "key",
-      "Authorization",
-      "auth",
-      "credentials",
-      "credit_card",
-      "creditCard",
-    ];
-
-    const sanitized = { ...body };
-
-    // Sanitize sensitive fields
-    for (const field of sensitiveFields) {
-      if (field in sanitized) {
-        sanitized[field] = "[REDACTED]";
-      }
-    }
-
-    return sanitized;
-  }
-
-  /**
-   * Truncate response body to avoid huge log entries
-   * @param body Response body
-   * @returns Truncated body
-   */
-  private truncateResponseBody(body: any): any {
-    if (!body) return undefined;
-
-    try {
-      // If it's a JSON string, parse it
-      const parsed = typeof body === "string" ? JSON.parse(body) : body;
-
-      // Limit size of nested objects
-      const truncateObject = (obj: any, depth: number = 0): any => {
-        if (depth > 2) return "[Object]";
-        if (Array.isArray(obj)) {
-          return obj.length > 5
-            ? [
-                ...obj.slice(0, 5).map(item => truncateObject(item, depth + 1)),
-                `... (${obj.length - 5} more)`,
-              ]
-            : obj.map(item => truncateObject(item, depth + 1));
-        }
-        if (obj && typeof obj === "object") {
-          const result: Record<string, any> = {};
-          for (const key of Object.keys(obj).slice(0, 10)) {
-            result[key] = truncateObject(obj[key], depth + 1);
-          }
-          if (Object.keys(obj).length > 10) {
-            result["..."] = `(${Object.keys(obj).length - 10} more properties)`;
-          }
-          return result;
-        }
-        return obj;
-      };
-
-      return truncateObject(parsed);
-    } catch (e) {
-      // If parsing fails, return truncated string
-      return typeof body === "string" && body.length > 500
-        ? body.substring(0, 500) + "... (truncated)"
-        : body;
-    }
   }
 }
 

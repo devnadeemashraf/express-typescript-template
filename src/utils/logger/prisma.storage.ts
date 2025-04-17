@@ -1,28 +1,18 @@
-import { PrismaClient } from "@prisma/client";
-import { ILogEntry } from "@/interfaces/logs";
+import { ELogType, ILogEntry } from "@/interfaces/logs";
+import { logsDB } from "@/db";
 import { env } from "@/configs";
 
 /**
  * PostgreSQL storage provider for logs using Prisma
  */
 export class PrismaLogStorage {
-  private prisma: PrismaClient;
-  private isConnected: boolean = false;
+  private prisma: any;
+  isConnected: boolean = false;
 
-  // TODO [devnadeemashraf]: Replace with Logger instead of console.error
-  /**
-   * Create a new Prisma log storage provider
-   */
   constructor() {
     // Initialize Prisma client for logs database
     try {
-      this.prisma = new PrismaClient({
-        datasources: {
-          db: {
-            url: env.db.logs.url,
-          },
-        },
-      });
+      this.prisma = logsDB.getClient();
       this.isConnected = true;
     } catch (error) {
       console.error("Failed to initialize Prisma client for logs:", error);
@@ -30,14 +20,10 @@ export class PrismaLogStorage {
     }
   }
 
-  // TODO [devnadeemashraf]: Replace with Logger instead of console.error
-  // TODO [devnadeemashraf]: Update levelMap to use LogLevel enum from Prisma
   /**
-   * Map ILogEntry to Prisma Log model format
-   * @param log Log entry to map
-   * @returns Log entry in Prisma format
+   * Map log entry to Prisma RequestLog model format
    */
-  private mapLogToPrismaFormat(log: ILogEntry) {
+  private mapToRequestLogFormat(log: ILogEntry) {
     // Map log level to Prisma LogLevel enum
     const levelMap: Record<string, any> = {
       debug: "DEBUG",
@@ -46,97 +32,171 @@ export class PrismaLogStorage {
       error: "ERROR",
     };
 
-    // Extract request details if available
-    const requestDetails = log.metadata?.request || {};
-    const userDetails = log.metadata?.user || {};
-    const errorDetails = log.metadata?.error || {};
-
     return {
       level: levelMap[log.level] || "INFO",
       message: log.message,
       timestamp: log.timestamp,
 
-      // Classification fields
-      environment: env.nodeEnv || "development",
-      service: log.metadata?.service || "api",
-      subsystem: log.metadata?.subsystem,
-      category: log.metadata?.category,
-      event_type: log.metadata?.eventType,
+      // Basic context
+      service: log.service || log.metadata?.service,
+      environment: log.environment || env.nodeEnv || "development",
 
       // Request context
-      trace_id: log.metadata?.traceId,
-      request_id: log.metadata?.requestId,
-      request_path: requestDetails.path,
-      request_method: requestDetails.method,
+      request_id: log.request_id || log.metadata?.request_id,
+      request_path: log.request_path || log.metadata?.request_path,
+      request_method: log.request_method || log.metadata?.request_method,
 
-      // User context
-      user_id: userDetails.id,
-      user_email: userDetails.email,
-      user_role: userDetails.role,
-      session_id: requestDetails.sessionId,
+      // User and performance
+      user_id: log.user_id || log.metadata?.user_id,
+      status_code: log.metadata?.status_code,
+      duration_ms: log.duration_ms || log.metadata?.duration_ms,
 
-      // Technical context
-      host: log.metadata?.host,
-      ip: requestDetails.ip,
-      user_agent: requestDetails.userAgent,
-
-      // Performance metrics
-      duration_ms: log.metadata?.duration,
-
-      // Error details
-      error_code: errorDetails.code,
-      error_type: errorDetails.type,
-      stack_trace: errorDetails.stack,
-
-      // Additional data
-      context: log.metadata?.context ? JSON.stringify(log.metadata.context) : null,
-      metadata: log.metadata ? JSON.stringify(log.metadata) : null,
-      request_body: requestDetails.body ? JSON.stringify(requestDetails.body) : null,
-      response_body: log.metadata?.response ? JSON.stringify(log.metadata.response) : null,
-
-      // Business metrics
-      business_id: log.metadata?.businessId,
-      business_action: log.metadata?.businessAction,
-      business_result: log.metadata?.businessResult,
-      business_value: log.metadata?.businessValue,
+      // Additional context
+      context: log.context || log.metadata ? JSON.stringify(log.metadata) : null,
     };
   }
 
-  // TODO [devnadeemashraf]: Replace with Logger instead of console.error
   /**
-   * Store logs in PostgreSQL database
-   * @param logs Array of log entries to store
-   * @returns Number of logs stored successfully
+   * Map log entry to Prisma ErrorLog model format
    */
-  async storeLogs(logs: ILogEntry[]): Promise<number> {
+  private mapToErrorLogFormat(log: ILogEntry) {
+    // Map log level to Prisma LogLevel enum
+    const levelMap: Record<string, any> = {
+      debug: "DEBUG",
+      info: "INFO",
+      warn: "WARNING",
+      error: "ERROR",
+    };
+
+    // Extract error information
+    const error = log.metadata?.error || {};
+
+    return {
+      level: levelMap[log.level] || "ERROR",
+      message: log.message,
+      timestamp: log.timestamp,
+
+      // Error details
+      error_name: error.name || log.metadata?.errorName,
+      stack_trace: log.stack_trace || error.stack,
+
+      // Context
+      service: log.service || log.metadata?.service,
+      environment: log.environment || env.nodeEnv || "development",
+      component: log.metadata?.component,
+
+      // Request context if available
+      request_id: log.request_id || log.metadata?.request_id,
+
+      // Additional context
+      context: log.context || log.metadata ? JSON.stringify(log.metadata) : null,
+    };
+  }
+
+  /**
+   * Store request logs in PostgreSQL database
+   */
+  async storeRequestLogs(logs: ILogEntry[]): Promise<number> {
     if (!this.isConnected || logs.length === 0) {
       return 0;
     }
 
     try {
-      // Map logs to Prisma format
-      const prismaLogs = logs.map(log => this.mapLogToPrismaFormat(log));
+      const prismaLogs = logs.map(log => this.mapToRequestLogFormat(log));
 
-      // Use createMany for bulk insert
       const result = await this.prisma.log.createMany({
         data: prismaLogs,
-        skipDuplicates: true, // Skip logs with duplicate IDs
+        skipDuplicates: true,
       });
 
       return result.count;
     } catch (error) {
-      console.error("Failed to store logs in PostgreSQL:", error);
+      console.error("Failed to store request logs in PostgreSQL:", error);
+      this.isConnected = false;
       return 0;
     }
+  }
+
+  /**
+   * Store error logs in PostgreSQL database
+   */
+  async storeErrorLogs(logs: ILogEntry[]): Promise<number> {
+    if (!this.isConnected || logs.length === 0) {
+      return 0;
+    }
+
+    try {
+      const prismaLogs = logs.map(log => this.mapToErrorLogFormat(log));
+
+      const result = await this.prisma.errorLog.createMany({
+        data: prismaLogs,
+        skipDuplicates: true,
+      });
+
+      return result.count;
+    } catch (error) {
+      console.error("Failed to store error logs in PostgreSQL:", error);
+      this.isConnected = false;
+      return 0;
+    }
+  }
+
+  /**
+   * Store logs in appropriate tables based on type
+   * @deprecated Use storeRequestLogs or storeErrorLogs instead
+   */
+  async storeLogs(logs: ILogEntry[]): Promise<number> {
+    // Split logs by type
+    const requestLogs = logs.filter(log => log.logType === ELogType.REQUEST);
+    const errorLogs = logs.filter(
+      log => log.logType === ELogType.ERROR || log.level === "error" || log.level === "warn"
+    );
+
+    let count = 0;
+
+    // Store in appropriate tables
+    if (requestLogs.length > 0) {
+      count += await this.storeRequestLogs(requestLogs);
+    }
+
+    if (errorLogs.length > 0) {
+      count += await this.storeErrorLogs(errorLogs);
+    }
+
+    return count;
   }
 
   /**
    * Close Prisma connection
    */
   async disconnect(): Promise<void> {
-    if (this.isConnected) {
-      await this.prisma.$disconnect();
+    if (this.prisma) {
+      try {
+        await this.prisma.$disconnect();
+      } catch (error) {
+        console.error("Error disconnecting from Prisma:", error);
+      }
       this.isConnected = false;
+    }
+  }
+
+  /**
+   * Test the database connection
+   */
+  async testConnection(): Promise<boolean> {
+    if (!this.prisma) {
+      return false;
+    }
+
+    try {
+      // Simple query to test the connection
+      await this.prisma.$queryRaw`SELECT 1`;
+      this.isConnected = true;
+      return true;
+    } catch (error) {
+      console.error("Prisma connection test failed:", error);
+      this.isConnected = false;
+      return false;
     }
   }
 }

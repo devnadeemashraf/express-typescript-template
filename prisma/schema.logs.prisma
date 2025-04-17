@@ -12,86 +12,69 @@ datasource db {
 enum LogLevel {
     DEBUG
     INFO
-    NOTICE
     WARNING
     ERROR
     CRITICAL
-    ALERT
-    EMERGENCY
 }
 
-// HTTP methods enum for consistent request method logging
-enum HttpMethod {
-    GET
-    POST
-    PUT
-    DELETE
-    PATCH
-    HEAD
-    OPTIONS
-}
-
-// Log model for comprehensive application monitoring and observability
+// For HTTP request logs
 model Log {
-    // Core fields
+    // Essential fields
     id        String   @id @default(cuid())
     timestamp DateTime @default(now())
-    level     LogLevel // Enum for consistent level categorization
+    level     LogLevel
     message   String // Human-readable description
 
-    // Classification fields
-    environment String? @db.VarChar(20) // 'development', 'staging', 'production'
+    // Basic context
     service     String? @db.VarChar(100) // Service/component name
-    subsystem   String? @db.VarChar(100) // Sub-component within service
-    category    String? @db.VarChar(50) // Functional category (e.g., 'database', 'auth', 'api')
-    event_type  String? @db.VarChar(100) // Type of event (e.g., 'user.login', 'payment.failed')
+    environment String? @db.VarChar(20) // 'development', 'staging', 'production'
 
-    // Request context
-    trace_id       String? @db.VarChar(100) // For distributed tracing
-    span_id        String? @db.VarChar(100) // For trace spans within a request
-    parent_span_id String? @db.VarChar(100) // For trace hierarchy
+    // Request context (minimal but useful)
     request_id     String? @db.VarChar(100) // Unique request identifier
     request_path   String? @db.VarChar(255) // API endpoint or resource path
-    request_method String? @db.VarChar(10) // HTTP method or operation type
+    request_method String? @db.VarChar(10) // HTTP method (GET, POST, etc.)
 
     // User context
-    user_id    String? @db.VarChar(100) // Who performed the action
-    user_email String? @db.VarChar(255) // User email for easier identification
-    user_role  String? @db.VarChar(50) // Role of the user
-    session_id String? @db.VarChar(100) // Session identifier
+    user_id String? @db.VarChar(100) // Who performed the action
 
-    // Technical context
-    host       String? @db.VarChar(255) // Server hostname
-    ip         String? @db.VarChar(45) // Client IP address
-    user_agent String? @db.VarChar(500) // User agent/browser details
+    // Performance Metrics
+    status_code Int? // HTTP status code (for request logs)
+    duration_ms Int? // Duration of the request in milliseconds
 
-    // Resource usage metrics
-    duration_ms     Int? // Operation duration in milliseconds
-    memory_usage_mb Float? // Memory usage in MB
-    cpu_usage       Float? // CPU usage percentage
+    // Flexible context field for additional data
+    context Json? // Additional context data as needed
+
+    // Practical indexes
+    @@index([timestamp, level])
+    @@index([request_path, timestamp])
+    @@index([user_id])
+    @@map("http_logs")
+}
+
+// For Console logs - Warning, Error and Criticals
+model ConsoleLog {
+    // Essential fields
+    id        String   @id @default(cuid())
+    timestamp DateTime @default(now())
+    level     LogLevel
+    message   String // Error message
 
     // Error details
-    error_code  String? @db.VarChar(100) // Error code for categorization
-    error_type  String? @db.VarChar(255) // Exception type/class
-    stack_trace String? // Stack trace for errors
+    error_name  String? @db.VarChar(100) // Error class/type
+    stack_trace String? // Stack trace for debugging
 
-    // Structured data
-    context       Json? // Additional structured context data
-    metadata      Json? // Additional metadata for analysis
-    request_body  Json? // Request payload (sanitized)
-    response_body Json? // Response payload (sanitized)
+    // Context info
+    service     String? @db.VarChar(100)
+    environment String? @db.VarChar(20)
+    component   String? @db.VarChar(100) // Which part of the app generated the error
 
-    // Business metrics
-    business_id     String? @db.VarChar(100) // Business entity ID (order ID, product ID, etc.)
-    business_action String? @db.VarChar(100) // Business action (purchase, refund, etc.)
-    business_result String? @db.VarChar(100) // Result of business action (success, failure, etc.)
-    business_value  Float? // Business value (order amount, etc.)
+    // Request context if available
+    request_id String? @db.VarChar(100)
 
-    // Indexes for performance
-    @@index([timestamp, level, service])
-    @@index([timestamp, user_id])
-    @@index([level, timestamp])
-    @@index([trace_id])
-    @@index([request_path, timestamp])
-    @@index([business_id])
+    // Additional context
+    context Json?
+
+    @@index([timestamp, level])
+    @@index([error_name, timestamp])
+    @@map("app_logs")
 }

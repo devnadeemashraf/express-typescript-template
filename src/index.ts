@@ -1,14 +1,20 @@
 // Express App
 import { createApp, startServer } from "@/app";
+import type { Express } from "@/app";
 
 // Logger
 import logger from "@/utils/logger";
+
+// Express App Instance for Global Export
+let app: Express | null = null;
 
 // HTTP Serve Function
 async function main() {
   try {
     // Initialize App
-    const app = await createApp();
+    if (!app) {
+      app = (await createApp()) as Express;
+    }
 
     // Start Server
     await startServer(app);
@@ -25,3 +31,6 @@ async function main() {
 
 // Run Server
 main();
+
+// Export Created App Instance
+export { app };
